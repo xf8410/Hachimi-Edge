@@ -92,8 +92,12 @@ extern "C" fn InitializeGame_MoveNext(enumerator: *mut Il2CppObject) -> bool {
 }
 
 fn InitializeGameCommon(enumerator: IEnumerator) -> IEnumerator {
-    if Hachimi::instance().config.load().ui_scale == 1.0 { return enumerator; }
-
+    // [uienh mod 2026-09-06] Removed the `ui_scale == 1.0` early-return.
+    // With default config it skipped hook_move_next entirely, so
+    // on_game_initialized() (character data init, skill info init, TextId
+    // caching, and EVERY plugin's hachimi_register_on_game_initialized
+    // callback) never fired. Always hooking costs one MoveNext shim and
+    // restores the callbacks for all users.
     if let Err(e) = enumerator.hook_move_next(InitializeGame_MoveNext) {
         error!("Failed to hook InitializeGame enumerator: {}", e);
     }
