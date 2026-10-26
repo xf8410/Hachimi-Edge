@@ -1,57 +1,26 @@
-use std::ops::Not;
+// 文本替换层已移除（clean 版）
+//
+// 原始实现会在 PopulateWithErrors 里用 localized_data.hashed_dict 做 FNV-64 哈希查表替换，
+// 并且**不受 auto_translate_localize / auto_translate_stories 开关控制**。
+// 现象：关闭翻译后 UI 数字仍被替换成占位值（如 123,456,789）、部分文字被替换成空白。
+//
+// 现在这里只做纯转调，不改写任何字符串。
+// TemplateContext / IgnoreTGFiltersContext 保留：它们是 $(...) 模板过滤器，被 GUI 侧引用，
+// 且不含任何文本替换逻辑，删掉会破坏其它模块编译。
 
-use crate::{core::{template, Hachimi}, il2cpp::{ext::{Il2CppStringExt, StringExt}, symbols::get_method_addr, types::*}};
+use crate::{core::template, il2cpp::{symbols::get_method_addr, types::*}};
 
 type PopulateWithErrorsFn = extern "C" fn(
     this: *mut Il2CppObject, str: *mut Il2CppString,
     settings: TextGenerationSettings_t, context: *mut Il2CppObject
 ) -> bool;
+
 extern "C" fn PopulateWithErrors(
     this: *mut Il2CppObject, str_: *mut Il2CppString,
-    mut settings: TextGenerationSettings_t, context: *mut Il2CppObject
+    settings: TextGenerationSettings_t, context: *mut Il2CppObject
 ) -> bool {
-    let orig_fn = get_orig_fn!(PopulateWithErrors, PopulateWithErrorsFn);
-    let localized_data = &Hachimi::instance().localized_data.load();
-    let hashed_dict = &localized_data.hashed_dict;
-
-    let mut new_str: Option<&String> = None;
-    let mut has_template: bool = false;
-    let ld_str: String;
-
-    // Check if the hashed dict has a match.
-    let hashed_text = hashed_dict.is_empty().not()
-        .then(|| hashed_dict.get(&unsafe { (*str_).hash() }))
-        .flatten();
-    if let Some(text) = hashed_text {
-        new_str = hashed_text;
-        has_template = text.contains("$");
-    }
-    // The string can be localized or original. Skip if we are sure it's not localized.
-    else if !localized_data.localize_dict.is_empty() || !localized_data.text_data_dict.is_empty() {
-        let utf_str = unsafe { (*str_).as_utf16str() };
-        if utf_str.as_slice().contains(&36) { // 36 = dollar sign ($)
-            has_template = true;
-            ld_str = utf_str.to_string();
-            new_str = Some(&ld_str);
-        }
-    }
-
-    if let Some(text) = new_str {
-        // Only try to evaluate a template if it looked like one
-        if has_template {
-            let mut template_context = TemplateContext {
-                settings: &mut settings
-            };
-            let tpl_text = &Hachimi::instance().template_parser.eval_with_context(text, &mut template_context);
-            orig_fn(this, tpl_text.to_il2cpp_string(), settings, context)
-        }
-        else {
-            orig_fn(this, text.to_il2cpp_string(), settings, context)
-        }
-    }
-    else {
-        orig_fn(this, str_, settings, context)
-    }
+    // 纯转调：不查字典、不套模板、不改 settings。
+    get_orig_fn!(PopulateWithErrors, PopulateWithErrorsFn)(this, str_, settings, context)
 }
 
 struct TemplateContext<'a> {
@@ -123,7 +92,7 @@ impl<'a> template::Context for TemplateContext<'a> {
 
             "ls" => {
                 let value = args.get(0)?;
-                let template::Token::NumberLit(ls) = *value else {
+                let template::Token::NumberLit(ls) = value else {
                     return None;
                 };
                 self.settings.lineSpacing = ls as f32;
