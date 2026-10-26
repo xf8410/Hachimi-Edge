@@ -1,63 +1,30 @@
-use std::{cell::LazyCell, collections::{hash_map::Entry, BTreeMap}};
-
-use fnv::FnvHashMap;
+use std::collections::BTreeMap;
 
 use crate::{
-    core::{utils, Hachimi, SugoiClient, game::Region},
-    il2cpp::{ext::{Il2CppStringExt, StringExt}, symbols::{get_method_overload_addr, unbox}, types::*}
+    core::{Hachimi, game::Region},
+    il2cpp::{ext::Il2CppStringExt, symbols::{get_method_overload_addr, unbox}, types::*}
 };
 
 use super::TextId;
 
-// SAFETY: Localize::Get is only called from the Unity main thread.
-static mut TEXTID_NAME_CACHE: LazyCell<FnvHashMap<i32, String>> = LazyCell::new(|| FnvHashMap::default());
+// 文本替换层已移除（clean 版）
+//
+// 原来 Gallop::Localize::Get 是游戏内 UI 文本的主要替换入口：
+//   1) 先查 localize_dict（按 TextId 名查表）→ 命中就直接返回替换文本；
+//   2) 未命中且 auto_translate_localize 打开时，走 SugoiClient 机翻（含异步回填）。
+//
+// 现在 Get 只做纯转调，一行替换都不做。
+// 保留 TextId 相关的 dump_strings：它只读原始文本、不写任何东西，供导出/对表使用。
 
 /**
  * Gallop::Localize::Get
  * Used by the game to get localized strings for builtin text (mostly UI).
- * 
- * id is a value of the TextId enum
- * cy devs likes to insert stuff at arbitrary locations within the enum, changing their values
- * so we'll just map them to their actual name instead
+ *
+ * clean 版：直接返回游戏原始文本。
  */
 type GetFn = extern "C" fn(id: i32) -> *mut Il2CppString;
 pub extern "C" fn Get(id: i32) -> *mut Il2CppString {
-    let hachimi = Hachimi::instance();
-    let localized_data = hachimi.localized_data.load();
-    if localized_data.localize_dict.is_empty() {
-        return get_orig_fn!(Get, GetFn)(id);
-    }
-
-    let name = match unsafe { TEXTID_NAME_CACHE.entry(id) } {
-        Entry::Occupied(e) => &*e.into_mut(),
-        Entry::Vacant(e) => {
-            let name = TextId::get_name(id);
-            let name_str = unsafe { (*name).as_utf16str().to_string() };
-            e.insert(name_str)
-        },
-    };
-
-    if let Some(text) = localized_data.localize_dict.get(name) {
-        text.to_il2cpp_string()
-    }
-    else {
-        let str = get_orig_fn!(Get, GetFn)(id);
-        if Hachimi::instance().config.load().translator_mode && id != 1109 && id != 1032 {
-            // 1109 and 1032 seems to be debugging strings (they're annoying)
-            utils::print_json_entry(name, unsafe { &(*str).as_utf16str().to_string() });
-        }
-        if hachimi.config.load().auto_translate_localize && !str.is_null() && unsafe { (*str).length > 0 } {
-            let s = unsafe { (*str).as_utf16str().to_string() };
-
-            let sugoi = SugoiClient::instance();
-            if let Some(translated) = sugoi.get_cached(&s) {
-                return translated.to_il2cpp_string();
-            } else {
-                sugoi.translate_async(s);
-            }
-        }
-        str
-    }
+    get_orig_fn!(Get, GetFn)(id)
 }
 
 pub fn dump_strings() -> BTreeMap<String, String> {
