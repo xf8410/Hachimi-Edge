@@ -1,9 +1,15 @@
 use std::sync::Mutex;
 use fnv::FnvHashMap;
 use once_cell::sync::Lazy;
-use crate::core::sugoi_client::{SugoiClient, StringInfo};
-use crate::il2cpp::symbols::GCHandle;
-use crate::il2cpp::{ext::{Il2CppStringExt, StringExt}, hook::UnityEngine_TextRenderingModule::TextAnchor, symbols::get_method_addr, types::*};
+use crate::core::sugoi_client::StringInfo;
+use crate::il2cpp::{ext::StringExt, hook::UnityEngine_TextRenderingModule::TextAnchor, symbols::get_method_addr, types::*};
+
+// 文本替换层已移除（clean 版）
+//
+// 原 set_text_hook 会在 auto_translate_localize/stories 打开时把文本送进 SugoiClient 机翻，
+// 并把每个 Text 组件注册进 ACTIVE_TEXT_COMPONENTS 供异步回填。
+// 现在 hook 只做纯转调；ACTIVE_TEXT_COMPONENTS / apply_translations 保留是因为其它模块仍引用它们，
+// 但组件表不会再被填充，因此 apply_translations 是空操作。
 
 static mut GET_LINESPACING_ADDR: usize = 0;
 impl_addr_wrapper_fn!(get_lineSpacing, GET_LINESPACING_ADDR, f32, this: *mut Il2CppObject);
@@ -69,27 +75,6 @@ pub static ACTIVE_TEXT_COMPONENTS: Lazy<Mutex<FnvHashMap<usize, StringInfo>>> = 
 
 type SetTextFn = extern "C" fn(this: *mut Il2CppObject, value: *mut Il2CppString);
 pub extern "C" fn set_text_hook(this: *mut Il2CppObject, value: *mut Il2CppString) {
-    if value.is_null() {
-        return get_orig_fn!(set_text_hook, SetTextFn)(this, value);
-    }
-
-    let config = crate::core::Hachimi::instance().config.load();
-    if !config.auto_translate_localize && !config.auto_translate_stories {
-        return get_orig_fn!(set_text_hook, SetTextFn)(this, value);
-    }
-
-    let orig_str = unsafe { (*value).as_utf16str().to_string() };
-    let str_info = StringInfo {
-        str_handle: GCHandle::new_weak_ref(this, false),
-        str: orig_str.clone()
-    };
-
-    ACTIVE_TEXT_COMPONENTS.lock().unwrap().insert(this as usize, str_info);
-
-    if let Some(trans) = SugoiClient::instance().get_cached(&orig_str) {
-        return get_orig_fn!(set_text_hook, SetTextFn)(this, trans.to_il2cpp_string());
-    }
-
     get_orig_fn!(set_text_hook, SetTextFn)(this, value);
 }
 
