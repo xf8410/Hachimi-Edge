@@ -1,0 +1,72 @@
+name: Build Clean (Android)
+
+# 只编 Android .so 的最小流水线，用来验证「去文本替换层」版本能否编过并产出可装的 libmain-arm64-v8a.so。
+# 不跑 Windows / Installer / Cellar，避免动不动 20 分钟。
+# egui 补丁与上游 create_release.yml 完全一致（同一 commit、同一 sed）。
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'workbench/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch egui (与上游 create_release.yml 一致)
+        run: |
+          pushd ..
+          git clone --revision 44cdd653e2317d300fb8a6c9c36b03f23991e803 https://github.com/emilk/egui.git
+          cd egui
+          sed -i 's/ui.set_min_width(ui.available_width());/\/\/ ui.set_min_width(ui.available_width());/' crates/egui/src/containers/combo_box.rs
+          popd
+          echo -e "\negui = { path = '../egui/crates/egui' }" >> Cargo.toml
+          echo "egui_extras = { path = '../egui/crates/egui_extras' }" >> Cargo.toml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> build
+          prefix-key: aarch64-linux-android
+
+      - name: Resolve NDK root
+        run: |
+          set -euo pipefail
+          echo "ANDROID_NDK_LATEST_HOME=$ANDROID_NDK_LATEST_HOME"
+          test -d "$ANDROID_NDK_LATEST_HOME" || { echo "::error::NDK missing"; exit 1; }
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME" >> $GITHUB_ENV
+
+      - name: Build
+        env:
+          RELEASE: "1"
+          HACHIMI_IGNORE_DIRTY: "true"
+        run: |
+          set -euo pipefail
+          chmod +x tools/android/build.sh
+          ./tools/android/build.sh
+          ls -l build/
+
+      - name: Report
+        run: |
+          set -euo pipefail
+          echo "::group::sha256.json"
+          cat build/sha256.json
+          echo "::endgroup::"
+          cat build/sha256.json > /tmp/v.json
+          sha256sum build/libmain-arm64-v8a.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clean-android
+          path: |
+            build/libmain-arm64-v8a.so
+            build/sha256.json
