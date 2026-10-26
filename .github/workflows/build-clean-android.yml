@@ -50,18 +50,25 @@ jobs:
           RELEASE: "1"
           HACHIMI_IGNORE_DIRTY: "true"
         run: |
-          set -euo pipefail
+          set -o pipefail
           chmod +x tools/android/build.sh
-          ./tools/android/build.sh
+          if ! ./tools/android/build.sh > /tmp/build.log 2>&1; then
+            echo "::group::编译错误（error 上下文，最多 40 行）"
+            grep -n -m1 -A40 '^error' /tmp/build.log || tail -n 80 /tmp/build.log
+            echo "::endgroup::"
+            echo "::group::错误数量与 rustc 版本"
+            grep -c '^error' /tmp/build.log || true
+            rustc --version || true
+            echo "::endgroup::"
+            exit 1
+          fi
+          tail -n 5 /tmp/build.log
           ls -l build/
 
       - name: Report
         run: |
           set -euo pipefail
-          echo "::group::sha256.json"
           cat build/sha256.json
-          echo "::endgroup::"
-          cat build/sha256.json > /tmp/v.json
           sha256sum build/libmain-arm64-v8a.so
 
       - uses: actions/upload-artifact@v4
